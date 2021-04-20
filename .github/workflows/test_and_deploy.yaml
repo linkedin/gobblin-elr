@@ -15,11 +15,14 @@
 # limitations under the License.
 #
 
-name: Test and Deploy
+name: Build and Run Tests
 
 on:
   push:
     # Publish only on `master`
+    branches:
+      - master
+  pull_request:
     branches:
       - master
   release:
@@ -49,7 +52,6 @@ jobs:
       - name: Build repository
         run: |
           ./gradlew --no-daemon clean build -x test -x javadoc -x findbugsMain -x findbugsTest -x checkstyleMain -x checkstyleJmh -x checkstyleTest -Dorg.gradle.parallel=true
-
   test_coverage:
     runs-on: ubuntu-latest
     name: Generate test coverage
@@ -73,7 +75,6 @@ jobs:
       - name: Generate code coverage
         run: |
           ./gradlew -PskipTestGroup=disabledOnCI -Dorg.gradle.parallel=false -DjacocoBuild=1 $GOBBLIN_GRADLE_OPTS jacocoTestCoverage
-
   static_checks:
     name: Run static checks
     runs-on: ubuntu-latest
@@ -98,9 +99,8 @@ jobs:
       - name: Run CheckStyle and FindBugs
         run: |
           ./gradlew --no-daemon -x javadoc findbugsMain checkstyleMain checkstyleTest checkstyleJmh
-
   run_tests:
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       GOBBLIN_GRADLE_OPTS: "--no-daemon -Dgobblin.metastore.testing.embeddedMysqlEnabled=false -PusePreinstalledMysql=true"
     strategy:
@@ -127,10 +127,14 @@ jobs:
         uses: actions/setup-java@v1
         with:
           java-version: 1.8
+      # Fix for bug where Github tests are failing port address binding.
+      - name: Add the current IP address, long hostname and short hostname record to /etc/hosts file
+        run: |
+          echo -e "$(ip addr show eth0 | grep "inet\b" | awk '{print $2}' | cut -d/ -f1)\t$(hostname -f) $(hostname -s)" | sudo tee -a /etc/hosts
       - name: Verify mysql connection
         run: |
-            sudo apt-get install -y mysql-client
-            mysql --host 127.0.0.1 --port 3306 -uroot -ppassword -e "SHOW DATABASES"
+          sudo apt-get install -y mysql-client
+          mysql --host 127.0.0.1 --port 3306 -uroot -ppassword -e "SHOW DATABASES"
       - name: Cache Gradle Dependencies
         uses: actions/cache@v2
         with:
@@ -146,7 +150,6 @@ jobs:
           ./gradlew getGroupedTests -PgroupName="${{matrix.test-group}}" > temp.txt
           TASKS=$(sed -n 's/CI Task: //p' temp.txt)
           echo $TASKS
-
           n=0
           until [ "$n" -ge 3 ]
           do
@@ -157,7 +160,7 @@ jobs:
             else
               exit 1
             fi
-            sleep 10
+            sleep 30
           done
   deploy:
     name: Deploy to Artifactory
@@ -166,6 +169,7 @@ jobs:
     env:
       ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
       ARTIFACTORY_API_KEY: ${{ secrets.ARTIFACTORY_API_KEY }}
+    if: ${{ github.event_name == 'push' }}
     steps:
       - name: Deploy to Artifactory
         run: |
