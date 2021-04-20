@@ -160,6 +160,8 @@ jobs:
             sleep 10
           done
   deploy:
+    name: Deploy to Artifactory
+    runs-on: ubuntu-latest
     needs: [build, test_coverage, static_checks, run_tests]
     env:
       ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
