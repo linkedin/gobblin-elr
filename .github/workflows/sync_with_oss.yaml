@@ -28,7 +28,7 @@ jobs:
           git checkout master
           CUR_HEAD=$(git rev-parse HEAD)
           echo "Current head at ${CUR_HEAD}"
-          git remote add upstream https://github.com/Will-Lo/incubator-gobblin.git
+          git remote add upstream https://github.com/apache/gobblin.git
           git fetch upstream master
           for commit in $(git rev-list $CUR_HEAD..upstream/master --reverse); do
               echo $commit
