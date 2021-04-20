@@ -1,0 +1,38 @@
+
+name: Sync with Open Source
+
+on:
+  # Triggers the workflow on push or pull request events but only for the master branch
+  schedule:
+    - cron:  '*/15 * * * *'
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v2
+        with:
+          token: ${{ secrets.PAT }}
+          fetch-depth: 0
+
+
+      # Create publish workflow for every commit that is picked up
+      - name: Git pull from master
+        run: |
+          git config --global user.email "wlo@linkedin.com"
+          git config --global user.name "William Lo"
+          git checkout master
+          CUR_HEAD=$(git rev-parse HEAD)
+          echo "Current head at ${CUR_HEAD}"
+          git remote add upstream https://github.com/apache/gobblin.git
+          git fetch upstream master
+          for commit in $(git rev-list $CUR_HEAD..upstream/master --reverse); do
+              echo $commit
+              git rebase $commit
+              # Force push to keep SHA consistent with remote after rebase
+              git push origin master -f
+          done
