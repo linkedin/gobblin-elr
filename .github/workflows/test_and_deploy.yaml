@@ -165,15 +165,15 @@ jobs:
       ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
       ARTIFACTORY_API_KEY: ${{ secrets.ARTIFACTORY_API_KEY }}
     steps:
-      name: Deploy to Artifactory
-      run: |
-        echo "Deploying jars to artifactory"
-        PROJECT_VERSION=$(./gradlew properties -q | grep "version:" | awk '{print $2}')
-        echo "Project Version: $PROJECT_VERSION"
-        BUILD_VERSION=$PROJECT_VERSION-ga-dev-${github.run_number}
-        echo "Build Version: $BUILD_VERSION"
+      - name: Deploy to Artifactory
+        run: |
+          echo "Deploying jars to artifactory"
+          PROJECT_VERSION=$(./gradlew properties -q | grep "version:" | awk '{print $2}')
+          echo "Project Version: $PROJECT_VERSION"
+          BUILD_VERSION=$PROJECT_VERSION-ga-dev-${github.run_number}
+          echo "Build Version: $BUILD_VERSION"
 
-        then
-          echo "Uploading artifacts to artifactory for version $BUILD_VERSION"
-          ./gradlew artifactoryPublish -Pversion=$BUILD_VERSION
-        fi
+          then
+            echo "Uploading artifacts to artifactory for version $BUILD_VERSION"
+            ./gradlew artifactoryPublish -Pversion=$BUILD_VERSION
+          fi
