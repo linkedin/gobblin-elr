@@ -17,15 +17,15 @@ jobs:
       - uses: actions/checkout@v2
         with:
           token: ${{ secrets.PAT }}
+          ref: prod
           fetch-depth: 0
 
-
       # Create publish workflow for every commit that is picked up
-      - name: Git pull from master
+      - name: Update mirror branch to match upstream master
         run: |
           git config --global user.email "wlo@linkedin.com"
           git config --global user.name "William Lo"
-          git checkout master
+          git checkout prod
           CUR_HEAD=$(git rev-parse HEAD)
           echo "Current head at ${CUR_HEAD}"
           git remote add upstream https://github.com/apache/gobblin.git
@@ -33,6 +33,18 @@ jobs:
           for commit in $(git rev-list $CUR_HEAD..upstream/master --reverse); do
               echo $commit
               git rebase $commit
-              # Force push to keep SHA consistent with remote after rebase
-              git push origin master -f
+              git push origin prod
           done
+
+      - uses: actions/checkout@v2
+        with:
+          token: ${{ secrets.PAT }}
+          ref: master
+          fetch-depth: 0
+
+      - name: Update master to upstream for tracking
+        run: |
+          git config --global user.email "wlo@linkedin.com"
+          git config --global user.name "William Lo"
+          git pull upstream master
+          git push origin master
