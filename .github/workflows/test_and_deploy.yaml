@@ -172,7 +172,7 @@ jobs:
           echo "Deploying jars to artifactory"
           PROJECT_VERSION=$(./gradlew properties -q | grep "version:" | awk '{print $2}')
           echo "Project Version: $PROJECT_VERSION"
-          BUILD_VERSION=$PROJECT_VERSION-ga-dev-${github.run_number}
+          BUILD_VERSION=$PROJECT_VERSION-ga-dev-${{github.run_number}}
           echo "Build Version: $BUILD_VERSION"
 
           then
