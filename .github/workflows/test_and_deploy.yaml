@@ -19,9 +19,9 @@ name: Test and Deploy
 
 on:
   push:
-    # Publish only on `master`
+    # Publish only on `prod`
     branches:
-      - master
+      - prod
   release:
     types: [published, edited]
 
