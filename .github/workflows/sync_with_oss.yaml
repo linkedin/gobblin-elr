@@ -17,7 +17,6 @@ jobs:
       - uses: actions/checkout@v2
         with:
           token: ${{ secrets.PAT }}
-          ref: prod
           fetch-depth: 0
 
       # Create publish workflow for every commit that is picked up
@@ -34,17 +33,8 @@ jobs:
               echo $commit
               git rebase $commit
               git push origin prod
+              git checkout master
+              git cherry-pick $commit
+              git push origin master
+              git checkout prod
           done
-
-      - uses: actions/checkout@v2
-        with:
-          token: ${{ secrets.PAT }}
-          ref: master
-          fetch-depth: 0
-
-      - name: Update master to upstream for tracking
-        run: |
-          git config --global user.email "wlo@linkedin.com"
-          git config --global user.name "William Lo"
-          git pull upstream master
-          git push origin master
