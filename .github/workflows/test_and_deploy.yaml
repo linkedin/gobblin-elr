@@ -21,7 +21,7 @@ on:
   push:
     # Publish only on `prod`
     branches:
-      - prod
+      - master
   release:
     types: [published, edited]
 
