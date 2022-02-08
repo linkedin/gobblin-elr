@@ -129,6 +129,7 @@ jobs:
           java-version: 1.8
       - name: Verify mysql connection
         run: |
+            sudo apt-get --fix-missing update
             sudo apt-get -f install -o Dpkg::Options::="--force-overwrite"
             sudo apt-get purge mysql\*
             sudo rm -rf /var/lib/mysql
