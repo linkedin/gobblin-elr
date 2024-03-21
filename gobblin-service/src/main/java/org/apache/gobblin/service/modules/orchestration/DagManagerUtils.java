@@ -68,18 +68,17 @@ public class DagManagerUtils {
     return getFlowId(dag.getStartNodes().get(0));
   }
 
-  public static DagActionStore.DagAction createDagActionFromDag(Dag<JobExecutionPlan> dag, DagActionStore.DagActionType dagActionType) {
-    return createDagActionFromDagNode(dag.getStartNodes().get(0), dagActionType);
+  public static DagActionStore.DagAction createDagActionFromDag(Dag<JobExecutionPlan> dag, DagActionStore.FlowActionType flowActionType) {
+    return createDagActionFromDagNode(dag.getStartNodes().get(0), flowActionType);
   }
 
-  // todo - verify if jobName will always be present or need default and update FlowId, DagId etc to contain jobName
-  public static DagActionStore.DagAction createDagActionFromDagNode(DagNode<JobExecutionPlan> dagNode, DagActionStore.DagActionType dagActionType) {
+  // todo - dag action object does not have any identifier to tell if it is for a complete dag or just for one dag node
+  public static DagActionStore.DagAction createDagActionFromDagNode(DagNode<JobExecutionPlan> dagNode, DagActionStore.FlowActionType flowActionType) {
     Config jobConfig = dagNode.getValue().getJobSpec().getConfig();
     String flowGroup = jobConfig.getString(ConfigurationKeys.FLOW_GROUP_KEY);
     String flowName =  jobConfig.getString(ConfigurationKeys.FLOW_NAME_KEY);
     String flowExecutionId = jobConfig.getString(ConfigurationKeys.FLOW_EXECUTION_ID_KEY);
-    String jobName = jobConfig.getString(ConfigurationKeys.JOB_NAME_KEY);
-    return new DagActionStore.DagAction(flowGroup, flowName, flowExecutionId, jobName, dagActionType);
+    return new DagActionStore.DagAction(flowGroup, flowName, flowExecutionId, flowActionType);
   }
 
   static FlowId getFlowId(DagNode<JobExecutionPlan> dagNode) {

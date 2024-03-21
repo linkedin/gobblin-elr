@@ -183,9 +183,8 @@ public class DagManager extends AbstractIdleService {
       return Joiner.on("_").join(flowGroup, flowName, flowExecutionId);
     }
 
-    DagActionStore.DagAction toDagAction(DagActionStore.DagActionType actionType) {
-      // defaults to empty jobName 
-      return new DagActionStore.DagAction(flowGroup, flowName, flowExecutionId, "", actionType);
+    DagActionStore.DagAction toDagAction(DagActionStore.FlowActionType actionType) {
+      return new DagActionStore.DagAction(flowGroup, flowName, flowExecutionId, actionType);
     }
   }
 
@@ -314,7 +313,7 @@ public class DagManager extends AbstractIdleService {
       // After persisting the dag, its status will be tracked by active dagManagers so the action should be deleted
       // to avoid duplicate executions upon leadership change
       if (this.dagActionStore.isPresent()) {
-        this.dagActionStore.get().deleteDagAction(dagId.toDagAction(DagActionStore.DagActionType.LAUNCH));
+        this.dagActionStore.get().deleteDagAction(dagId.toDagAction(DagActionStore.FlowActionType.LAUNCH));
       }
     }
     int queueId = DagManagerUtils.getDagQueueId(dag, this.numThreads);
@@ -589,10 +588,10 @@ public class DagManager extends AbstractIdleService {
       }
     }
 
-    private void removeDagActionFromStore(DagId dagId, DagActionStore.DagActionType dagActionType) throws IOException {
+    private void removeDagActionFromStore(DagId dagId, DagActionStore.FlowActionType flowActionType) throws IOException {
       if (this.dagActionStore.isPresent()) {
         this.dagActionStore.get().deleteDagAction(
-            new DagActionStore.DagAction(dagId.flowGroup, dagId.flowName, dagId.flowExecutionId, "", dagActionType));
+            new DagActionStore.DagAction(dagId.flowGroup, dagId.flowName, dagId.flowExecutionId, flowActionType));
       }
     }
 
@@ -604,13 +603,13 @@ public class DagManager extends AbstractIdleService {
       String dagId= dagIdToResume.toString();
       if (!this.failedDagIds.contains(dagId)) {
         log.warn("No dag found with dagId " + dagId + ", so cannot resume flow");
-        removeDagActionFromStore(dagIdToResume, DagActionStore.DagActionType.RESUME);
+        removeDagActionFromStore(dagIdToResume, DagActionStore.FlowActionType.RESUME);
         return;
       }
       Dag<JobExecutionPlan> dag = this.failedDagStateStore.getDag(dagId);
       if (dag == null) {
         log.error("Dag " + dagId + " was found in memory but not found in failed dag state store");
-        removeDagActionFromStore(dagIdToResume, DagActionStore.DagActionType.RESUME);
+        removeDagActionFromStore(dagIdToResume, DagActionStore.FlowActionType.RESUME);
         return;
       }
 
@@ -664,7 +663,7 @@ public class DagManager extends AbstractIdleService {
         if (dagReady) {
           this.dagStateStore.writeCheckpoint(dag.getValue());
           this.failedDagStateStore.cleanUp(dag.getValue());
-          removeDagActionFromStore(DagManagerUtils.generateDagId(dag.getValue()), DagActionStore.DagActionType.RESUME);
+          removeDagActionFromStore(DagManagerUtils.generateDagId(dag.getValue()), DagActionStore.FlowActionType.RESUME);
           this.failedDagIds.remove(dag.getKey());
           this.resumingDags.remove(dag.getKey());
           initialize(dag.getValue());
@@ -694,7 +693,7 @@ public class DagManager extends AbstractIdleService {
         log.warn("Did not find Dag with id {}, it might be already cancelled/finished.", dagToCancel);
       }
       // Called after a KILL request is received
-      removeDagActionFromStore(dagId, DagActionStore.DagActionType.KILL);
+      removeDagActionFromStore(dagId, DagActionStore.FlowActionType.KILL);
     }
 
     private void cancelDagNode(DagNode<JobExecutionPlan> dagNodeToCancel) throws ExecutionException, InterruptedException {

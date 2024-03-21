@@ -56,12 +56,5 @@ public abstract class DagTask {
    * Returns true if concluding dag task finished successfully otherwise false.
    */
   // todo call it from the right place
-  public boolean conclude() {
-    try {
-      return this.leaseObtainedStatus.completeLease();
-    } catch (IOException e) {
-      // TODO: Decide appropriate exception to throw and add to the commit method's signature
-      throw new RuntimeException(e);
-    }
-  }
+  public abstract boolean conclude() throws IOException;
 }

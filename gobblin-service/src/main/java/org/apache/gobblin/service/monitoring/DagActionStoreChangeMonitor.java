@@ -197,11 +197,10 @@ public class DagActionStoreChangeMonitor extends HighLevelConsumer {
       return;
     }
 
-    DagActionStore.DagActionType dagActionType = DagActionStore.DagActionType.valueOf(value.getDagAction().toString());
+    DagActionStore.FlowActionType dagActionType = DagActionStore.FlowActionType.valueOf(value.getDagAction().toString());
 
     // Used to easily log information to identify the dag action
-    // TODO: add jobName to the dagAction change event
-    DagActionStore.DagAction dagAction = new DagActionStore.DagAction(flowGroup, flowName, flowExecutionId, "",
+    DagActionStore.DagAction dagAction = new DagActionStore.DagAction(flowGroup, flowName, flowExecutionId,
         dagActionType);
 
     // We only expect INSERT and DELETE operations done to this table. INSERTs correspond to any type of
@@ -236,16 +235,16 @@ public class DagActionStoreChangeMonitor extends HighLevelConsumer {
    */
   protected void handleDagAction(DagActionStore.DagAction dagAction, boolean isStartup) {
     log.info("(" + (isStartup ? "on-startup" : "post-startup") + ") DagAction change ({}) received for flow: {}",
-        dagAction.getDagActionType(), dagAction);
-    if (dagAction.getDagActionType().equals(DagActionStore.DagActionType.RESUME)) {
+        dagAction.getFlowActionType(), dagAction);
+    if (dagAction.getFlowActionType().equals(DagActionStore.FlowActionType.RESUME)) {
       dagManager.handleResumeFlowRequest(dagAction.getFlowGroup(), dagAction.getFlowName(),
           Long.parseLong(dagAction.getFlowExecutionId()));
       this.resumesInvoked.mark();
-    } else if (dagAction.getDagActionType().equals(DagActionStore.DagActionType.KILL)) {
+    } else if (dagAction.getFlowActionType().equals(DagActionStore.FlowActionType.KILL)) {
       dagManager.handleKillFlowRequest(dagAction.getFlowGroup(), dagAction.getFlowName(),
           Long.parseLong(dagAction.getFlowExecutionId()));
       this.killsInvoked.mark();
-    } else if (dagAction.getDagActionType().equals(DagActionStore.DagActionType.LAUNCH)) {
+    } else if (dagAction.getFlowActionType().equals(DagActionStore.FlowActionType.LAUNCH)) {
       // If multi-active scheduler is NOT turned on we should not receive these type of events
       if (!this.isMultiActiveSchedulerEnabled) {
         this.unexpectedErrors.mark();
@@ -254,7 +253,7 @@ public class DagActionStoreChangeMonitor extends HighLevelConsumer {
       }
       submitFlowToDagManagerHelper(dagAction, isStartup);
     } else {
-      log.warn("Received unsupported dagAction {}. Expected to be a KILL, RESUME, or LAUNCH", dagAction.getDagActionType());
+      log.warn("Received unsupported dagAction {}. Expected to be a KILL, RESUME, or LAUNCH", dagAction.getFlowActionType());
       this.unexpectedErrors.mark();
     }
   }
@@ -273,7 +272,7 @@ public class DagActionStoreChangeMonitor extends HighLevelConsumer {
    */
   protected void submitFlowToDagManagerHelper(DagActionStore.DagAction dagAction,
       LaunchSubmissionMetricProxy launchSubmissionMetricProxy) {
-    Preconditions.checkArgument(dagAction.getDagActionType() == DagActionStore.DagActionType.LAUNCH);
+    Preconditions.checkArgument(dagAction.getFlowActionType() == DagActionStore.FlowActionType.LAUNCH);
     log.info("Forward launch flow event to DagManager for action {}", dagAction);
     // Retrieve job execution plan by recompiling the flow spec to send to the DagManager
     FlowId flowId = dagAction.getFlowId();
