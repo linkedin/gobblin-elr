@@ -8,7 +8,7 @@ namespace org.apache.gobblin.service
 record Issue {
 
   /**
-   * Time when the issue have occured
+   * Time when the issue have occurred
    */
   time: Timestamp
 
