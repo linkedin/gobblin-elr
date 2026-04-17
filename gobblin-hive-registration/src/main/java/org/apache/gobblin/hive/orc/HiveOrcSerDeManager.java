@@ -249,7 +249,7 @@ public class HiveOrcSerDeManager extends HiveSerDeManager {
 
       return true;
     } catch (Exception e) {
-      throw new RuntimeException("Error occured when checking the type of file:" + file);
+      throw new RuntimeException("Error occurred when checking the type of file:" + file);
     }
   }
 
