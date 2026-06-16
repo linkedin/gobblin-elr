@@ -109,7 +109,9 @@ public class ServiceBasedAppLauncher implements ApplicationLauncher {
   private volatile boolean hasStarted = false;
   private volatile boolean hasStopped = false;
 
-  private ServiceManager serviceManager;
+  // volatile: written once in start() and read without the monitor in awaitStopped(), so safe publication is
+  // needed (and keeps FindBugs IS2_INCONSISTENT_SYNC quiet).
+  private volatile ServiceManager serviceManager;
 
   public ServiceBasedAppLauncher(Properties properties, String appName) throws Exception {
     this.stopTime = Integer.parseInt(properties.getProperty(APP_STOP_TIME_SECONDS, DEFAULT_APP_STOP_TIME_SECONDS));
@@ -212,6 +214,23 @@ public class ServiceBasedAppLauncher implements ApplicationLauncher {
       this.serviceManager.stopAsync().awaitStopped(this.stopTime, TimeUnit.SECONDS);
     } catch (TimeoutException te) {
       LOG.error("Timeout in stopping the service manager", te);
+    }
+  }
+
+  /**
+   * Block until every managed service has reached a terminal state (the application has fully stopped). Does not
+   * itself initiate shutdown; waits for a stop triggered elsewhere. Returns {@code false} if it times out first,
+   * or {@code true} immediately if the launcher was never {@link #start() started}.
+   */
+  public boolean awaitStopped(long timeout, TimeUnit unit) throws InterruptedException {
+    if (this.serviceManager == null) {
+      return true;
+    }
+    try {
+      this.serviceManager.awaitStopped(timeout, unit);
+      return true;
+    } catch (TimeoutException te) {
+      return false;
     }
   }
 

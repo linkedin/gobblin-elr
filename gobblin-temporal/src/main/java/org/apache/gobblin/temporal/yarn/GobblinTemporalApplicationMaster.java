@@ -21,8 +21,10 @@ import com.google.common.base.Optional;
 import com.google.common.util.concurrent.Service;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
+import com.google.common.annotations.VisibleForTesting;
 import com.typesafe.config.ConfigValueFactory;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import lombok.Getter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +34,7 @@ import io.temporal.api.enums.v1.WorkflowExecutionStatus;
 import org.apache.gobblin.annotation.Alpha;
 import org.apache.gobblin.cluster.GobblinClusterConfigurationKeys;
 import org.apache.gobblin.cluster.GobblinClusterUtils;
+import org.apache.gobblin.configuration.ConfigurationKeys;
 import org.apache.gobblin.temporal.cluster.GobblinTemporalClusterManager;
 import org.apache.gobblin.temporal.joblauncher.GobblinTemporalJobLauncher;
 import org.apache.gobblin.util.ConfigUtils;
@@ -127,6 +130,23 @@ public class GobblinTemporalApplicationMaster extends GobblinTemporalClusterMana
     return new YarnTemporalAppMasterSecurityManager(config, fs, this.eventBus, this.logCopier, this._yarnService);
   }
 
+  /** Block until the AM application has fully stopped (all services incl. {@code YarnService} terminal). */
+  @VisibleForTesting
+  boolean awaitApplicationStopped(long timeout, TimeUnit unit) throws InterruptedException {
+    return this.applicationLauncher.awaitStopped(timeout, unit);
+  }
+
+  /** The configured flow SLA ({@code gobblin.flow.sla.time}) in millis, or a generous fallback when unset. */
+  private static long flowSlaMillis(Config config) {
+    if (!config.hasPath(ConfigurationKeys.GOBBLIN_FLOW_FINISH_DEADLINE_TIME)) {
+      return TimeUnit.DAYS.toMillis(1);
+    }
+    TimeUnit unit = TimeUnit.valueOf(ConfigUtils.getString(config,
+        ConfigurationKeys.GOBBLIN_FLOW_FINISH_DEADLINE_TIME_UNIT,
+        ConfigurationKeys.DEFAULT_GOBBLIN_FLOW_FINISH_DEADLINE_TIME_UNIT));
+    return unit.toMillis(config.getLong(ConfigurationKeys.GOBBLIN_FLOW_FINISH_DEADLINE_TIME));
+  }
+
   private static Options buildOptions() {
     Options options = new Options();
     options.addOption("a", GobblinClusterConfigurationKeys.APPLICATION_NAME_OPTION_NAME, true, "Yarn application name");
@@ -162,20 +182,28 @@ public class GobblinTemporalApplicationMaster extends GobblinTemporalClusterMana
       ContainerId containerId =
           ConverterUtils.toContainerId(System.getenv().get(ApplicationConstants.Environment.CONTAINER_ID.key()));
 
+      Config config = ConfigFactory.load();
+      WorkflowExecutionStatus terminalStatus;
       try (GobblinTemporalApplicationMaster applicationMaster = new GobblinTemporalApplicationMaster(
           cmd.getOptionValue(GobblinClusterConfigurationKeys.APPLICATION_NAME_OPTION_NAME),
           cmd.getOptionValue(GobblinClusterConfigurationKeys.APPLICATION_ID_OPTION_NAME), containerId,
-          ConfigFactory.load(), new YarnConfiguration())) {
+          config, new YarnConfiguration())) {
 
         applicationMaster.start();
+
+        // start() can return while the workflow is still running (the job runs inside a service startUp(), so
+        // ServiceBasedAppLauncher proceeds once app.start.waitForServicesTimeout elapses). Exiting then would
+        // cancel/un-register the in-flight workflow and mis-report a successful long job as CANCELLED. Instead wait
+        // until the application has actually stopped (all services incl. YarnService terminal -> after un-register),
+        // bounded by the flow SLA (gobblin.flow.sla.time); the GaaS control plane cancels SLA overruns, unblocking
+        // this wait.
+        if (!applicationMaster.awaitApplicationStopped(flowSlaMillis(config), TimeUnit.MILLISECONDS)) {
+          LOGGER.warn("AM did not stop within the flow SLA; proceeding to exit");
+        }
+        terminalStatus = GobblinTemporalJobLauncher.getLastTerminalStatus();
       }
 
-      // Surface the underlying workflow outcome as the AM JVM exit code so GGW/Grid Gateway dashboards see
-      // failures end-to-end. The status was captured into a static cache by GobblinTemporalJobLauncher via
-      // handleLaunchFinalization on normal completion (this is also what the temporal YarnService uses to derive
-      // the FinalApplicationStatus reported to YARN). A null cache means the workflow never reached a terminal
-      // state under this AM (preemption/error/crash mid-run) -> non-zero exit, consistent with FinalApplicationStatus.
-      WorkflowExecutionStatus terminalStatus = GobblinTemporalJobLauncher.getLastTerminalStatus();
+      // Surface the captured workflow outcome as the AM JVM exit code (null = never reached terminal -> non-zero).
       int exitCode = GobblinTemporalJobLauncher.computeExitCode(terminalStatus);
       LOGGER.info("GobblinTemporalApplicationMaster exiting with code {} (workflow terminal status: {})",
           exitCode, terminalStatus);
