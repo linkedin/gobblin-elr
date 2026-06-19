@@ -265,6 +265,163 @@ public class HadoopUtilsTest {
   }
 
   @Test
+  public void testRenameRecursivelyOrderedMovesDataBeforeMetadata() throws Exception {
+    final Path testDir = new Path(Files.createTempDir().getAbsolutePath(), "HadoopUtilsTestDir");
+    final FileSystem fs = Mockito.spy(FileSystem.getLocal(new Configuration()));
+
+    // Record the destination of every successful rename, in the order they actually happen. Data renames are
+    // slowed down so that, WITHOUT the phase barrier, the fast metadata renames would land first -- making this a
+    // real regression guard for the ordering (not a pass-by-luck on fast local renames).
+    final List<String> renameDestinations = Collections.synchronizedList(Lists.<String>newArrayList());
+    Mockito.doAnswer(new Answer<Boolean>() {
+      @Override
+      public Boolean answer(InvocationOnMock invocation) throws Throwable {
+        Path dst = (Path) invocation.getArguments()[1];
+        if (dst.toString().endsWith(".orc")) {
+          Thread.sleep(200);
+        }
+        Boolean result = (Boolean) invocation.callRealMethod();
+        if (Boolean.TRUE.equals(result)) {
+          renameDestinations.add(dst.toString());
+        }
+        return result;
+      }
+    }).when(fs).rename(Mockito.any(Path.class), Mockito.any(Path.class));
+
+    try {
+      // Staging tree mirrors an Iceberg table: data/ holds the data files, metadata/ references them by path.
+      Path staging = new Path(testDir, "staging");
+      fs.mkdirs(new Path(staging, "table1/data"));
+      fs.mkdirs(new Path(staging, "table1/metadata"));
+      fs.create(new Path(staging, "table1/data/f1.orc")).close();
+      fs.create(new Path(staging, "table1/data/f2.orc")).close();
+      fs.create(new Path(staging, "table1/metadata/m1.avro")).close();
+      fs.create(new Path(staging, "table1/metadata/m2.avro")).close();
+
+      // Pre-create the target table dir and its data/metadata children so the rename descends to file level --
+      // the incremental/retry case where per-file ordering actually matters (no atomic whole-subtree move).
+      Path target = new Path(testDir, "target");
+      fs.mkdirs(new Path(target, "table1/data"));
+      fs.mkdirs(new Path(target, "table1/metadata"));
+
+      HadoopUtils.renameRecursivelyOrdered(fs, staging, target, HadoopUtils::isIcebergMetadataDir);
+
+      // Every file landed at the target.
+      Assert.assertTrue(fs.exists(new Path(target, "table1/data/f1.orc")));
+      Assert.assertTrue(fs.exists(new Path(target, "table1/data/f2.orc")));
+      Assert.assertTrue(fs.exists(new Path(target, "table1/metadata/m1.avro")));
+      Assert.assertTrue(fs.exists(new Path(target, "table1/metadata/m2.avro")));
+
+      // Every data file was renamed strictly before any metadata file.
+      int lastDataIdx = -1;
+      int firstMetadataIdx = Integer.MAX_VALUE;
+      for (int i = 0; i < renameDestinations.size(); i++) {
+        String dst = renameDestinations.get(i);
+        if (dst.endsWith(".orc")) {
+          lastDataIdx = Math.max(lastDataIdx, i);
+        } else if (dst.endsWith(".avro")) {
+          firstMetadataIdx = Math.min(firstMetadataIdx, i);
+        }
+      }
+      Assert.assertTrue(lastDataIdx >= 0, "Expected at least one data rename, got: " + renameDestinations);
+      Assert.assertTrue(firstMetadataIdx != Integer.MAX_VALUE,
+          "Expected at least one metadata rename, got: " + renameDestinations);
+      Assert.assertTrue(lastDataIdx < firstMetadataIdx,
+          "All data files must be renamed before any metadata file. Actual order: " + renameDestinations);
+    } finally {
+      fs.delete(testDir, true);
+    }
+  }
+
+  @Test
+  public void testRenameRecursivelyOrderedFreshTableCopiesEverything() throws Exception {
+    // When the target table dir does not yet exist, the whole subtree moves atomically (nothing is deferred);
+    // verify the ordered variant still copies every file correctly.
+    final Path testDir = new Path(Files.createTempDir().getAbsolutePath(), "HadoopUtilsTestDir");
+    final FileSystem fs = FileSystem.getLocal(new Configuration());
+    try {
+      Path staging = new Path(testDir, "staging");
+      fs.mkdirs(new Path(staging, "table1/data"));
+      fs.mkdirs(new Path(staging, "table1/metadata"));
+      fs.create(new Path(staging, "table1/data/f1.orc")).close();
+      fs.create(new Path(staging, "table1/metadata/m1.avro")).close();
+
+      Path target = new Path(testDir, "target");
+
+      HadoopUtils.renameRecursivelyOrdered(fs, staging, target, HadoopUtils::isIcebergMetadataDir);
+
+      Assert.assertTrue(fs.exists(new Path(target, "table1/data/f1.orc")));
+      Assert.assertTrue(fs.exists(new Path(target, "table1/metadata/m1.avro")));
+    } finally {
+      fs.delete(testDir, true);
+    }
+  }
+
+  @Test
+  public void testRenameRecursivelyOrderedAbortsBeforeMetadataWhenDataRenameFails() throws Exception {
+    // If a data-phase rename fails, the metadata phase must never run (Iceberg metadata must not be published
+    // when the data it references failed to land).
+    final Path testDir = new Path(Files.createTempDir().getAbsolutePath(), "HadoopUtilsTestDir");
+    final FileSystem fs = Mockito.spy(FileSystem.getLocal(new Configuration()));
+
+    // Fail every data (.orc) rename; record any metadata (.avro) rename that is attempted.
+    final List<String> metadataRenameAttempts = Collections.synchronizedList(Lists.<String>newArrayList());
+    Mockito.doAnswer(new Answer<Object>() {
+      @Override
+      public Object answer(InvocationOnMock invocation) throws Throwable {
+        Path dst = (Path) invocation.getArguments()[1];
+        if (dst.toString().endsWith(".avro")) {
+          metadataRenameAttempts.add(dst.toString());
+        }
+        if (dst.toString().endsWith(".orc")) {
+          throw new IOException("Injected failure renaming data file " + dst);
+        }
+        return invocation.callRealMethod();
+      }
+    }).when(fs).rename(Mockito.any(Path.class), Mockito.any(Path.class));
+
+    try {
+      Path staging = new Path(testDir, "staging");
+      fs.mkdirs(new Path(staging, "table1/data"));
+      fs.mkdirs(new Path(staging, "table1/metadata"));
+      fs.create(new Path(staging, "table1/data/f1.orc")).close();
+      fs.create(new Path(staging, "table1/data/f2.orc")).close();
+      fs.create(new Path(staging, "table1/metadata/m1.avro")).close();
+      fs.create(new Path(staging, "table1/metadata/m2.avro")).close();
+
+      // Pre-create the target table dir and children so the rename descends to file level.
+      Path target = new Path(testDir, "target");
+      fs.mkdirs(new Path(target, "table1/data"));
+      fs.mkdirs(new Path(target, "table1/metadata"));
+
+      try {
+        HadoopUtils.renameRecursivelyOrdered(fs, staging, target, HadoopUtils::isIcebergMetadataDir);
+        Assert.fail("Expected the rename to fail during the data phase");
+      } catch (IOException expected) {
+        // expected: the data-phase failure aborts the whole operation
+      }
+
+      Assert.assertTrue(metadataRenameAttempts.isEmpty(),
+          "Metadata must not be renamed after a data-phase failure, but these were attempted: "
+              + metadataRenameAttempts);
+      // And no metadata file should have actually landed at the target.
+      Assert.assertFalse(fs.exists(new Path(target, "table1/metadata/m1.avro")));
+      Assert.assertFalse(fs.exists(new Path(target, "table1/metadata/m2.avro")));
+    } finally {
+      fs.delete(testDir, true);
+    }
+  }
+
+  @Test
+  public void testIsIcebergMetadataDir() {
+    Assert.assertTrue(HadoopUtils.isIcebergMetadataDir(new Path("/data/openhouse/db/tbl-uuid/metadata")));
+    Assert.assertFalse(HadoopUtils.isIcebergMetadataDir(new Path("/data/openhouse/db/tbl-uuid/data")));
+    // The `/data` HDFS mount is not an Iceberg metadata dir, and the predicate matches the dir, not its files.
+    Assert.assertFalse(HadoopUtils.isIcebergMetadataDir(new Path("/data")));
+    Assert.assertFalse(HadoopUtils.isIcebergMetadataDir(new Path("/data/openhouse/db/tbl-uuid/metadata/m1.avro")));
+  }
+
+  @Test
   public void testSanitizePath() throws Exception {
     Assert.assertEquals(HadoopUtils.sanitizePath("/A:B/::C:::D\\", "abc"), "/AabcB/abcabcCabcabcabcDabc");
     Assert.assertEquals(HadoopUtils.sanitizePath(":\\:\\/", ""), "/");
