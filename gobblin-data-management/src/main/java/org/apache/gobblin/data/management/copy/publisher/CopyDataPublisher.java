@@ -342,7 +342,8 @@ public class CopyDataPublisher extends DataPublisher implements UnpublishedHandl
 
     if (statesHelper.hasAnyCopyableFile()) {
       // Targets are always absolute, so we start moving from root (will skip any existing directories).
-      HadoopUtils.renameRecursively(this.fs, datasetWriterOutputPath, new Path("/"));
+      HadoopUtils.renameRecursivelyOrdered(this.fs, datasetWriterOutputPath, new Path("/"),
+          HadoopUtils::isIcebergMetadataDir);
     } else {
       log.info("[{}] No copyable files in dataset. Proceeding to post-publish steps.", datasetAndPartition.identifier());
     }

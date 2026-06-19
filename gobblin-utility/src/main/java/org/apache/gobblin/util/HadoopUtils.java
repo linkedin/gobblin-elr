@@ -28,6 +28,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
 import java.nio.file.AccessDeniedException;
+import java.util.AbstractMap;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
@@ -38,6 +39,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
@@ -551,8 +553,8 @@ public class HadoopUtils {
         throw new IOException("Trying to rename a path that does not exist! " + from);
       }
 
-      futures.add(executorService
-          .submit(new RenameRecursively(throttledFS, fileSystem.getFileStatus(from), to, executorService, futures)));
+      futures.add(executorService.submit(
+          new RenameRecursively(throttledFS, fileSystem.getFileStatus(from), to, executorService, futures, null, null)));
       int futuresUsed = 0;
       while (!futures.isEmpty()) {
         try {
@@ -568,6 +570,95 @@ public class HadoopUtils {
     } finally {
       ExecutorsUtils.shutdownExecutorService(executorService, Optional.of(log), 1, TimeUnit.SECONDS);
     }
+  }
+
+  /**
+   * Like {@link #renameRecursively(FileSystem, Path, Path)} but renames in two phases: every directory subtree whose
+   * root matches {@code deferToLastPhase} is held back and renamed only after all other files have been fully
+   * renamed. Both phases use the same concurrent, atomic-subtree-move machinery as the unordered variant.
+   *
+   * <p>
+   * Used by Iceberg distcp publishing to move the {@code metadata/} subtree only after every other file (the
+   * {@code data/} files and anything else) has landed, since Iceberg metadata references data files by path and must
+   * never become visible ahead of the data it points to. {@code deferToLastPhase} is evaluated only on directory
+   * nodes encountered during the descent -- not on every file -- so the {@code metadata/} subtree is identified by
+   * its directory name and never enumerated file-by-file.
+   * </p>
+   *
+   * @param fileSystem on which the data needs to be moved
+   * @param from path of the data to be moved
+   * @param to path of the data to be moved
+   * @param deferToLastPhase predicate on a directory {@link Path}; matching subtrees are renamed in the last phase
+   */
+  public static void renameRecursivelyOrdered(FileSystem fileSystem, Path from, Path to,
+      Predicate<Path> deferToLastPhase) throws IOException {
+
+    log.info(String.format("Recursively renaming (ordered) %s in %s to %s.", from, fileSystem.getUri(), to));
+
+    FileSystem throttledFS = getOptionallyThrottledFileSystem(fileSystem, 10000);
+
+    ExecutorService executorService = ScalingThreadPoolExecutor.newScalingThreadPool(1, 100, 100,
+        ExecutorsUtils.newThreadFactory(Optional.of(log), Optional.of("rename-thread-%d")));
+    Queue<Future<?>> futures = Queues.newConcurrentLinkedQueue();
+    // Subtrees skipped in phase 1 (their root FileStatus and target path), to be renamed in phase 2.
+    Queue<Entry<FileStatus, Path>> deferred = Queues.newConcurrentLinkedQueue();
+
+    try {
+      if (!fileSystem.exists(from)) {
+        throw new IOException("Trying to rename a path that does not exist! " + from);
+      }
+
+      // Phase 1: rename everything except the deferred subtrees (which are collected into `deferred`).
+      log.info(String.format("[ordered-rename] Phase 1: renaming all non-deferred files under %s to %s.", from, to));
+      futures.add(executorService.submit(new RenameRecursively(
+          throttledFS, fileSystem.getFileStatus(from), to, executorService, futures, deferToLastPhase, deferred)));
+      drainFutures(futures);
+      log.info(String.format("[ordered-rename] Phase 1 complete for %s. Deferred %d subtree(s) for phase 2: %s",
+          from, deferred.size(), deferredSourcePaths(deferred)));
+
+      // Phase 2: rename the deferred subtrees, now that everything else is in place. No further deferral.
+      for (Entry<FileStatus, Path> entry : deferred) {
+        log.info(String.format("[ordered-rename] Phase 2: renaming deferred directory %s to %s.",
+            entry.getKey().getPath(), entry.getValue()));
+        futures.add(executorService.submit(new RenameRecursively(
+            throttledFS, entry.getKey(), entry.getValue(), executorService, futures, null, null)));
+      }
+      drainFutures(futures);
+
+      log.info(String.format("[ordered-rename] Recursive ordered renaming of %s to %s complete (%d deferred subtree(s)).",
+          from, to, deferred.size()));
+
+    } finally {
+      ExecutorsUtils.shutdownExecutorService(executorService, Optional.of(log), 1, TimeUnit.SECONDS);
+    }
+  }
+
+  private static void drainFutures(Queue<Future<?>> futures) throws IOException {
+    while (!futures.isEmpty()) {
+      try {
+        futures.poll().get();
+      } catch (ExecutionException | InterruptedException ee) {
+        throw new IOException(ee.getCause());
+      }
+    }
+  }
+
+  private static List<Path> deferredSourcePaths(Queue<Entry<FileStatus, Path>> deferred) {
+    List<Path> paths = Lists.newArrayListWithCapacity(deferred.size());
+    for (Entry<FileStatus, Path> entry : deferred) {
+      paths.add(entry.getKey().getPath());
+    }
+    return paths;
+  }
+
+  /**
+   * Whether {@code path} is an Iceberg {@code metadata/} directory. Used as the {@code deferToLastPhase} predicate of
+   * {@link #renameRecursivelyOrdered(FileSystem, Path, Path, Predicate)} so the {@code metadata/} subtree is renamed
+   * after the {@code data/} files it references. Matches on the directory name alone -- unlike {@code data}, there is
+   * no like-named HDFS mount to disambiguate.
+   */
+  public static boolean isIcebergMetadataDir(Path path) {
+    return "metadata".equals(path.getName());
   }
 
   /**
@@ -619,10 +710,22 @@ public class HadoopUtils {
     private final Path to;
     private final ExecutorService executorService;
     private final Queue<Future<?>> futures;
+    // When non-null, directory subtrees matching this predicate are not renamed here but recorded in `deferred`
+    // for a later phase. Evaluated only on directories, so files are never visited individually for this check.
+    private final Predicate<Path> deferPredicate;
+    private final Queue<Entry<FileStatus, Path>> deferred;
 
     @Override
     public void run() {
       try {
+
+        // Hold back deferred subtrees (e.g. Iceberg `metadata/`) for a later phase instead of renaming them now.
+        if (this.deferPredicate != null && this.from.isDirectory() && this.deferPredicate.test(this.from.getPath())) {
+          log.info(String.format("[ordered-rename] Deferring directory %s (-> %s) to the last phase.",
+              this.from.getPath(), this.to));
+          this.deferred.add(new AbstractMap.SimpleImmutableEntry<>(this.from, this.to));
+          return;
+        }
 
         // Attempt to move safely if directory, unsafely if file (for performance, files are much less likely to collide on target)
         boolean moveSucessful;
@@ -646,8 +749,9 @@ public class HadoopUtils {
               Path relativeFilePath = new Path(StringUtils.substringAfter(fromFile.getPath().toString(),
                   this.from.getPath().toString() + Path.SEPARATOR));
               Path toFilePath = new Path(this.to, relativeFilePath);
-              this.futures.add(this.executorService.submit(
-                  new RenameRecursively(this.fileSystem, fromFile, toFilePath, this.executorService, this.futures)));
+              this.futures.add(this.executorService.submit(new RenameRecursively(
+                  this.fileSystem, fromFile, toFilePath, this.executorService, this.futures, this.deferPredicate,
+                  this.deferred)));
             }
           } else {
             log.info(String.format("File already exists %s. Will not rewrite", this.to));
