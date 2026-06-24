@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -236,6 +237,9 @@ public class GobblinYarnAppLauncher {
   // This flag tells if the Yarn application has already completed. This is used to
   // tell if it is necessary to send a shutdown message to the ApplicationMaster.
   private volatile boolean applicationCompleted = false;
+  // Released by the status monitor once the application reaches a terminal state (or the launcher is stopped);
+  // in attached mode launch()/run() blocks on this so it represents the full application lifecycle.
+  private final CountDownLatch applicationTerminalLatch = new CountDownLatch(1);
 
   private volatile boolean stopped = false;
 
@@ -408,6 +412,28 @@ public class GobblinYarnAppLauncher {
       handleApplicationLaunchFailure(e);
       throw e;
     }
+
+    // In attached mode, block the calling (launch()/run()) thread until the status monitor signals that the
+    // application has reached a terminal state (or the launcher was otherwise stopped), then tear down. Running
+    // stop() here -- on the calling thread rather than the monitor thread -- shuts the (non-daemon) status
+    // monitor and the launcher's services down before launch() returns, so no launcher-owned thread is left to
+    // keep the JVM alive. Detached launches return right after submission, leaving the application running.
+    if (!this.detachOnExitEnabled) {
+      LOGGER.info("Waiting for Gobblin Yarn application {} to reach a terminal state before exiting the launcher",
+          this.applicationId.get());
+      try {
+        this.applicationTerminalLatch.await();
+      } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+        LOGGER.info("Interrupted while waiting for Gobblin Yarn application {} to complete", this.applicationId.get());
+      }
+      LOGGER.info("Gobblin Yarn application monitoring complete; stopping the launcher");
+      try {
+        stop();
+      } catch (IOException | TimeoutException e) {
+        LOGGER.error("Failed to stop " + GobblinYarnAppLauncher.class.getSimpleName() + " after application monitoring", e);
+      }
+    }
   }
 
   public boolean isApplicationRunning() {
@@ -459,6 +485,10 @@ public class GobblinYarnAppLauncher {
     if (this.stopped) {
       return;
     }
+
+    // Release the launch()/run() thread if it is blocked waiting for the application to finish (e.g. on an
+    // external cancel/shutdown) so it can return.
+    this.applicationTerminalLatch.countDown();
 
     LOGGER.info("Stopping the " + GobblinYarnAppLauncher.class.getSimpleName());
 
@@ -522,17 +552,22 @@ public class GobblinYarnAppLauncher {
 
       handleTerminalAppStatus(applicationReport);
 
-      try {
-        GobblinYarnAppLauncher.this.stop();
-      } catch (IOException ioe) {
-        LOGGER.error("Failed to close the " + GobblinYarnAppLauncher.class.getSimpleName(), ioe);
-      } catch (TimeoutException te) {
-        LOGGER.error("Timeout in stopping the service manager", te);
-      } finally {
-        if (this.emailNotificationOnShutdown) {
-          sendEmailOnShutdown(Optional.of(applicationReport));
+      // Detached launches have no caller blocked on the latch, so stop here as before. Attached launches are
+      // torn down by the launch()/run() thread once it is released by the latch below -- running stop() off this
+      // monitor thread avoids a self-shutdown of this executor.
+      if (this.detachOnExitEnabled) {
+        try {
+          GobblinYarnAppLauncher.this.stop();
+        } catch (IOException ioe) {
+          LOGGER.error("Failed to close the " + GobblinYarnAppLauncher.class.getSimpleName(), ioe);
+        } catch (TimeoutException te) {
+          LOGGER.error("Timeout in stopping the service manager", te);
         }
       }
+      if (this.emailNotificationOnShutdown) {
+        sendEmailOnShutdown(Optional.of(applicationReport));
+      }
+      this.applicationTerminalLatch.countDown();
     }
   }
 
@@ -611,17 +646,21 @@ public class GobblinYarnAppLauncher {
 
       handleLostAmVisibility();
 
-      try {
-        stop();
-      } catch (IOException ioe) {
-        LOGGER.error("Failed to close the " + GobblinYarnAppLauncher.class.getSimpleName(), ioe);
-      } catch (TimeoutException te) {
-        LOGGER.error("Timeout in stopping the service manager", te);
-      } finally {
-        if (this.emailNotificationOnShutdown) {
-          sendEmailOnShutdown(Optional.<ApplicationReport>absent());
+      // See handleApplicationReportArrivalEvent: detached launches stop here; attached launches are torn down by
+      // the launch()/run() thread once the latch below releases it (off this monitor thread).
+      if (this.detachOnExitEnabled) {
+        try {
+          stop();
+        } catch (IOException ioe) {
+          LOGGER.error("Failed to close the " + GobblinYarnAppLauncher.class.getSimpleName(), ioe);
+        } catch (TimeoutException te) {
+          LOGGER.error("Timeout in stopping the service manager", te);
         }
       }
+      if (this.emailNotificationOnShutdown) {
+        sendEmailOnShutdown(Optional.<ApplicationReport>absent());
+      }
+      this.applicationTerminalLatch.countDown();
     }
   }
 
