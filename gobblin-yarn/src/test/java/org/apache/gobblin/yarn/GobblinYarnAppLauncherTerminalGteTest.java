@@ -18,16 +18,23 @@
 package org.apache.gobblin.yarn;
 
 import java.lang.reflect.Field;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import com.google.common.base.Optional;
 
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.api.records.ApplicationReport;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
+import org.apache.hadoop.yarn.api.records.YarnApplicationState;
 import org.mockito.Mockito;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import org.apache.gobblin.metrics.event.TimingEvent;
+import org.apache.gobblin.yarn.event.ApplicationReportArrivalEvent;
+import org.apache.gobblin.yarn.event.GetApplicationReportFailureEvent;
 
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
@@ -165,5 +172,62 @@ public class GobblinYarnAppLauncherTerminalGteTest {
     assertEquals(readExitCode(), 0);
     Mockito.verify(this.launcher, Mockito.times(1))
         .onTerminalApplicationStatus(Mockito.any(), Mockito.any());
+  }
+
+  // ---------- applicationTerminalLatch: monitor releases the launch()/run() thread, off the monitor thread ----------
+
+  private ApplicationReport terminalReport(FinalApplicationStatus status) {
+    ApplicationReport report = mockReport(status);
+    when(report.getYarnApplicationState()).thenReturn(YarnApplicationState.FINISHED);
+    when(report.getDiagnostics()).thenReturn("");
+    return report;
+  }
+
+  @Test
+  public void testTerminalReportReleasesLatchAndDoesNotStopWhenAttached() throws Exception {
+    // Attached (detachOnExitEnabled defaults to false): the monitor signals the latch and does NOT call stop()
+    // itself -- the blocked launch()/run() thread performs teardown, avoiding a self-shutdown of the monitor.
+    CountDownLatch latch = new CountDownLatch(1);
+    setField("applicationTerminalLatch", latch);
+    setField("getApplicationReportFailureCount", new AtomicInteger(0));
+    setField("helixClusterLifecycleManager", Optional.absent());
+
+    this.launcher.handleApplicationReportArrivalEvent(
+        new ApplicationReportArrivalEvent(terminalReport(FinalApplicationStatus.SUCCEEDED)));
+
+    assertEquals(latch.getCount(), 0);
+    Mockito.verify(this.launcher, Mockito.never()).stop();
+  }
+
+  @Test
+  public void testLostAmReleasesLatchAndDoesNotStopWhenAttached() throws Exception {
+    // Regression guard: the lost-AM-visibility path stops/releases without ever setting applicationCompleted, so
+    // the latch must still be released (otherwise launch()/run() would block forever).
+    CountDownLatch latch = new CountDownLatch(1);
+    setField("applicationTerminalLatch", latch);
+    setField("getApplicationReportFailureCount", new AtomicInteger(0)); // maxGetApplicationReportFailures defaults to 0
+
+    this.launcher.handleGetApplicationReportFailureEvent(
+        new GetApplicationReportFailureEvent(new RuntimeException("rm unreachable")));
+
+    assertEquals(latch.getCount(), 0);
+    Mockito.verify(this.launcher, Mockito.never()).stop();
+  }
+
+  @Test
+  public void testTerminalReportStopsDirectlyWhenDetached() throws Exception {
+    // Detached: no caller is blocked on the latch, so the monitor tears down here as before.
+    CountDownLatch latch = new CountDownLatch(1);
+    setField("applicationTerminalLatch", latch);
+    setField("getApplicationReportFailureCount", new AtomicInteger(0));
+    setField("helixClusterLifecycleManager", Optional.absent());
+    setField("detachOnExitEnabled", true);
+    Mockito.doNothing().when(this.launcher).stop();
+
+    this.launcher.handleApplicationReportArrivalEvent(
+        new ApplicationReportArrivalEvent(terminalReport(FinalApplicationStatus.SUCCEEDED)));
+
+    Mockito.verify(this.launcher, Mockito.times(1)).stop();
+    assertEquals(latch.getCount(), 0);
   }
 }
