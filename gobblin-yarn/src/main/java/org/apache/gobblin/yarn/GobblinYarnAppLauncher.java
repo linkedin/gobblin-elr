@@ -190,14 +190,10 @@ public class GobblinYarnAppLauncher {
   // lookup the application this class has launched previously upon restarting.
   private static final Set<String> APPLICATION_TYPES = ImmutableSet.of(GOBBLIN_YARN_APPLICATION_TYPE);
 
-  // The set of Yarn application states under which the driver can reconnect to the Yarn application after restart
-  private static final EnumSet<YarnApplicationState> RECONNECTABLE_APPLICATION_STATES = EnumSet.of(
-      YarnApplicationState.NEW,
-      YarnApplicationState.NEW_SAVING,
-      YarnApplicationState.SUBMITTED,
-      YarnApplicationState.ACCEPTED,
-      YarnApplicationState.RUNNING
-  );
+  // The set of Yarn application states under which the driver can reconnect to the Yarn application after restart.
+  // Includes all Yarn application states so the driver can reconnect regardless of the application's current state.
+  private static final EnumSet<YarnApplicationState> RECONNECTABLE_APPLICATION_STATES =
+      EnumSet.allOf(YarnApplicationState.class);
 
   private final String applicationName;
   private final String appQueueName;
