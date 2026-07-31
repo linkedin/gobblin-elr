@@ -188,6 +188,31 @@
                 "name" : "estimatedSecondsToCompletion",
                 "type" : "long",
                 "doc" : "estimate of time left until job completion"
+              }, {
+                "name" : "bytesWritten",
+                "type" : "long",
+                "doc" : "Number of bytes written/copied for the dataset in this job execution.\nOptional; populated by writers that report byte counts (e.g. DDM file/blob replication), -1 if unsupported.",
+                "optional" : true
+              }, {
+                "name" : "recordsWritten",
+                "type" : "long",
+                "doc" : "Number of records (or files, for file/blob copies) written for the dataset in this job execution.\nOptional; -1 if unsupported by the writer.",
+                "optional" : true
+              }, {
+                "name" : "filesCommitted",
+                "type" : "long",
+                "doc" : "Number of files committed for the dataset in this job execution.\nOptional; populated by file/blob writers (e.g. DDM Iceberg replication), absent otherwise.",
+                "optional" : true
+              }, {
+                "name" : "snapshotsCommitted",
+                "type" : "string",
+                "doc" : "Comma-separated list of the ids of the table snapshots committed for the dataset in this job\nexecution (e.g. Iceberg snapshot-replication commits).\nOptional; absent when the writer does not commit snapshots or does not report them.",
+                "optional" : true
+              }, {
+                "name" : "partitionsCommitted",
+                "type" : "string",
+                "doc" : "Comma-separated list of the partitions committed for the dataset in this job execution.\nOptional; absent when the writer does not commit partitions or does not report them.",
+                "optional" : true
               } ]
             },
             "doc" : "Statistics from the job execution. The values may be updated during the run of a job."

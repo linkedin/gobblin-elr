@@ -29,4 +29,35 @@ record JobStatistics {
    * estimate of time left until job completion
    */
   estimatedSecondsToCompletion: long
+
+  /**
+   * Number of bytes written/copied for the dataset in this job execution.
+   * Optional; populated by writers that report byte counts (e.g. DDM file/blob replication), -1 if unsupported.
+   */
+  bytesWritten: optional long
+
+  /**
+   * Number of records (or files, for file/blob copies) written for the dataset in this job execution.
+   * Optional; -1 if unsupported by the writer.
+   */
+  recordsWritten: optional long
+
+  /**
+   * Number of files committed for the dataset in this job execution.
+   * Optional; populated by file/blob writers (e.g. DDM Iceberg replication), absent otherwise.
+   */
+  filesCommitted: optional long
+
+  /**
+   * Comma-separated list of the ids of the table snapshots committed for the dataset in this job
+   * execution (e.g. Iceberg snapshot-replication commits).
+   * Optional; absent when the writer does not commit snapshots or does not report them.
+   */
+  snapshotsCommitted: optional string
+
+  /**
+   * Comma-separated list of the partitions committed for the dataset in this job execution.
+   * Optional; absent when the writer does not commit partitions or does not report them.
+   */
+  partitionsCommitted: optional string
 }

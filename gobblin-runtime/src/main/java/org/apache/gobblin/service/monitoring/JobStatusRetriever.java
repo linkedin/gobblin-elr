@@ -60,6 +60,16 @@ public abstract class JobStatusRetriever implements LatestFlowExecutionIdTracker
   public static final String EVENT_NAME_FIELD = "eventName";
   public static final String NA_KEY = "NA";
 
+  // File/blob movement writers report per-dataset copy metrics on the JobSummary event via these
+  // flat metadata keys; the job-status monitor persists them into the job state, and they are
+  // surfaced here on the JobStatistics REST surface. -1 = absent/unsupported for the counts;
+  // the snapshot ids and partitions are comma-separated lists, null = absent/unreported.
+  public static final String BYTES_WRITTEN_FIELD = "bytesCopied";
+  public static final String RECORDS_WRITTEN_FIELD = "rowsCopied";
+  public static final String FILES_COMMITTED_FIELD = "filesCommitted";
+  public static final String SNAPSHOTS_COMMITTED_FIELD = "snapshotsCommitted";
+  public static final String PARTITIONS_COMMITTED_FIELD = "partitionsCommitted";
+
   @Getter
   protected final MetricContext metricContext;
 
@@ -156,13 +166,20 @@ public abstract class JobStatusRetriever implements LatestFlowExecutionIdTracker
     boolean shouldRetry = Boolean.parseBoolean(jobState.getProp(TimingEvent.FlowEventConstants.SHOULD_RETRY_FIELD, "false"));
     int progressPercentage = jobState.getPropAsInt(TimingEvent.JOB_COMPLETION_PERCENTAGE, 0);
     long lastProgressEventTime = jobState.getPropAsLong(TimingEvent.JOB_LAST_PROGRESS_EVENT_TIME, 0);
+    long bytesWritten = jobState.getPropAsLong(BYTES_WRITTEN_FIELD, -1L);
+    long recordsWritten = jobState.getPropAsLong(RECORDS_WRITTEN_FIELD, -1L);
+    long filesCommitted = jobState.getPropAsLong(FILES_COMMITTED_FIELD, -1L);
+    String snapshotsCommitted = jobState.getProp(SNAPSHOTS_COMMITTED_FIELD, null);
+    String partitionsCommitted = jobState.getProp(PARTITIONS_COMMITTED_FIELD, null);
 
     return JobStatus.builder().flowName(flowName).flowGroup(flowGroup).flowExecutionId(flowExecutionId).jobName(jobName)
         .jobGroup(jobGroup).jobTag(jobTag).jobExecutionId(jobExecutionId).eventName(eventName).lowWatermark(lowWatermark)
         .highWatermark(highWatermark).orchestratedTime(orchestratedTime).startTime(startTime).endTime(endTime)
         .message(message).processedCount(processedCount).maxAttempts(maxAttempts).currentAttempts(currentAttempts)
         .currentGeneration(currentGeneration).shouldRetry(shouldRetry).progressPercentage(progressPercentage)
-        .lastProgressEventTime(lastProgressEventTime);
+        .lastProgressEventTime(lastProgressEventTime)
+        .bytesWritten(bytesWritten).recordsWritten(recordsWritten).filesCommitted(filesCommitted)
+        .snapshotsCommitted(snapshotsCommitted).partitionsCommitted(partitionsCommitted);
   }
 
   protected static final String getFlowGroup(State jobState) {

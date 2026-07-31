@@ -60,4 +60,12 @@ public class JobStatus {
   private final Supplier<List<Issue>> issues;
   private final int progressPercentage;
   private final long lastProgressEventTime;
+  // Optional per-dataset copy metrics surfaced on the job-status REST API (JobStatistics).
+  // Populated for writers that report them (e.g. DDM file/blob replication); -1 = unset/unsupported
+  // for the counts. The snapshot ids and partitions are comma-separated lists; null = unreported.
+  @Builder.Default private final long bytesWritten = -1L;
+  @Builder.Default private final long recordsWritten = -1L;
+  @Builder.Default private final long filesCommitted = -1L;
+  @Builder.Default private final String snapshotsCommitted = null;
+  @Builder.Default private final String partitionsCommitted = null;
 }

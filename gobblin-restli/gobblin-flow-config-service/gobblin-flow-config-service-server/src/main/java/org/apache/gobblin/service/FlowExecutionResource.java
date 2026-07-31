@@ -184,17 +184,35 @@ public class FlowExecutionResource extends ComplexKeyResourceTemplate<FlowStatus
       Long timeLeft = estimateCopyTimeLeft(queriedJobStatus.getLastProgressEventTime(), queriedJobStatus.getStartTime(),
           queriedJobStatus.getProgressPercentage());
 
+      JobStatistics jobStatistics = new JobStatistics()
+          .setExecutionStartTime(queriedJobStatus.getStartTime())
+          .setExecutionEndTime(queriedJobStatus.getEndTime())
+          .setProcessedCount(queriedJobStatus.getProcessedCount())
+          .setJobProgress(queriedJobStatus.getProgressPercentage())
+          .setEstimatedSecondsToCompletion(timeLeft);
+      // Optional per-dataset copy metrics (e.g. DDM file/blob replication); set only when reported.
+      if (queriedJobStatus.getBytesWritten() >= 0) {
+        jobStatistics.setBytesWritten(queriedJobStatus.getBytesWritten());
+      }
+      if (queriedJobStatus.getRecordsWritten() >= 0) {
+        jobStatistics.setRecordsWritten(queriedJobStatus.getRecordsWritten());
+      }
+      if (queriedJobStatus.getFilesCommitted() >= 0) {
+        jobStatistics.setFilesCommitted(queriedJobStatus.getFilesCommitted());
+      }
+      if (queriedJobStatus.getSnapshotsCommitted() != null) {
+        jobStatistics.setSnapshotsCommitted(queriedJobStatus.getSnapshotsCommitted());
+      }
+      if (queriedJobStatus.getPartitionsCommitted() != null) {
+        jobStatistics.setPartitionsCommitted(queriedJobStatus.getPartitionsCommitted());
+      }
+
       jobStatus.setFlowId(flowId)
           .setJobId(new JobId()
               .setJobName(queriedJobStatus.getJobName())
               .setJobGroup(queriedJobStatus.getJobGroup()))
           .setJobTag(queriedJobStatus.getJobTag(), SetMode.IGNORE_NULL)
-          .setExecutionStatistics(new JobStatistics()
-              .setExecutionStartTime(queriedJobStatus.getStartTime())
-              .setExecutionEndTime(queriedJobStatus.getEndTime())
-              .setProcessedCount(queriedJobStatus.getProcessedCount())
-              .setJobProgress(queriedJobStatus.getProgressPercentage())
-              .setEstimatedSecondsToCompletion(timeLeft))
+          .setExecutionStatistics(jobStatistics)
           .setExecutionStatus(ExecutionStatus.valueOf(queriedJobStatus.getEventName()))
           .setMessage(queriedJobStatus.getMessage())
           .setJobState(new JobState()
