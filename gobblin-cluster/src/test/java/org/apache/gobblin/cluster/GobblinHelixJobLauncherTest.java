@@ -35,6 +35,8 @@ import org.apache.hadoop.fs.Path;
 import org.apache.helix.HelixManager;
 import org.apache.helix.HelixManagerFactory;
 import org.apache.helix.InstanceType;
+import org.apache.helix.task.JobConfig;
+import org.apache.helix.task.TaskConfig;
 import org.apache.helix.task.TaskDriver;
 import org.apache.helix.task.WorkflowConfig;
 import org.apache.helix.task.WorkflowContext;
@@ -44,10 +46,12 @@ import org.slf4j.LoggerFactory;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.io.Closer;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
@@ -59,12 +63,15 @@ import org.apache.gobblin.configuration.ConfigurationKeys;
 import org.apache.gobblin.configuration.WorkUnitState;
 import org.apache.gobblin.metastore.DatasetStateStore;
 import org.apache.gobblin.metrics.Tag;
+import org.apache.gobblin.runtime.ExecutionModel;
 import org.apache.gobblin.runtime.FsDatasetStateStore;
 import org.apache.gobblin.runtime.JobContext;
 import org.apache.gobblin.runtime.JobException;
 import org.apache.gobblin.runtime.JobState;
+import org.apache.gobblin.runtime.TaskConfigurationKeys;
 import org.apache.gobblin.runtime.listeners.AbstractJobListener;
 import org.apache.gobblin.runtime.listeners.JobListener;
+import org.apache.gobblin.source.workunit.WorkUnit;
 import org.apache.gobblin.util.ClassAliasResolver;
 import org.apache.gobblin.util.ConfigUtils;
 
@@ -227,6 +234,45 @@ public class GobblinHelixJobLauncherTest {
 
     Assert.assertEquals(datasetState.getTaskStates().size(), 1);
     Assert.assertEquals(datasetState.getTaskStates().get(0).getWorkingState(), WorkUnitState.WorkingState.COMMITTED);
+  }
+
+  @DataProvider
+  public Object[][] executionModels() {
+    return new Object[][] {{null}, {ExecutionModel.BATCH}, {ExecutionModel.STREAMING}};
+  }
+
+  @Test(dataProvider = "executionModels")
+  public void testGenericJobConfigurationWithoutRunningTaskRebalance(ExecutionModel executionModel)
+      throws Exception {
+    Properties properties = generateJobProperties(this.baseConfig, "config" + executionModel, "_1504201348470");
+    properties.remove(TaskConfigurationKeys.TASK_EXECUTION_MODE);
+    if (executionModel != null) {
+      properties.setProperty(TaskConfigurationKeys.TASK_EXECUTION_MODE, executionModel.name());
+    }
+    properties.setProperty(GobblinClusterConfigurationKeys.HELIX_TASK_MAX_ATTEMPTS_KEY, "3");
+    properties.setProperty(GobblinClusterConfigurationKeys.HELIX_TASK_TIMEOUT_SECONDS, "5");
+    properties.setProperty(GobblinClusterConfigurationKeys.HELIX_CLUSTER_TASK_CONCURRENCY, "2");
+    properties.setProperty(GobblinClusterConfigurationKeys.HELIX_WORKFLOW_EXPIRY_TIME_SECONDS, "1234");
+
+    GobblinHelixJobLauncher launcher = this.closer.register(
+        new GobblinHelixJobLauncher(properties, this.helixManager, this.appWorkDir, ImmutableList.<Tag<?>>of(),
+            new ConcurrentHashMap<>(), java.util.Optional.empty()));
+    TaskConfig taskConfig = new TaskConfig(GobblinTaskRunner.GOBBLIN_TASK_FACTORY_NAME,
+        ImmutableMap.of("workUnit", "test"), "task", null);
+    JobConfig jobConfig = launcher.translateGobblinJobConfigToHelixJobConfig(new JobState(properties),
+        ImmutableList.of(WorkUnit.createEmpty()), ImmutableMap.of(taskConfig.getId(), taskConfig))
+        .setWorkflow("workflow").setJobId("job").build();
+
+    Assert.assertNull(jobConfig.getTargetResource());
+    Assert.assertFalse(Boolean.parseBoolean(jobConfig.getRecord().getSimpleField("RebalanceRunningTask")));
+    Assert.assertEquals(jobConfig.getCommand(), GobblinTaskRunner.GOBBLIN_TASK_FACTORY_NAME);
+    Assert.assertEquals(jobConfig.getTaskConfigMap().size(), 1);
+    Assert.assertEquals(jobConfig.getTaskConfig("task").getConfigMap(), taskConfig.getConfigMap());
+    Assert.assertEquals(jobConfig.getMaxAttemptsPerTask(), 4);
+    Assert.assertEquals(jobConfig.getTimeoutPerTask(), 5000L);
+    Assert.assertEquals(jobConfig.getNumConcurrentTasksPerInstance(), 2);
+    Assert.assertEquals(jobConfig.getFailureThreshold(), 1);
+    Assert.assertEquals(jobConfig.getExpiry(), 1234L);
   }
 
   private static class SuspendJobListener extends AbstractJobListener {

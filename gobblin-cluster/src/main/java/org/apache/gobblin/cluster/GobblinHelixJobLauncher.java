@@ -74,11 +74,9 @@ import org.apache.gobblin.metrics.event.JobEvent;
 import org.apache.gobblin.metrics.event.TimingEvent;
 import org.apache.gobblin.rest.LauncherTypeEnum;
 import org.apache.gobblin.runtime.AbstractJobLauncher;
-import org.apache.gobblin.runtime.ExecutionModel;
 import org.apache.gobblin.runtime.JobException;
 import org.apache.gobblin.runtime.JobLauncher;
 import org.apache.gobblin.runtime.JobState;
-import org.apache.gobblin.runtime.Task;
 import org.apache.gobblin.runtime.TaskState;
 import org.apache.gobblin.runtime.TaskStateCollectorService;
 import org.apache.gobblin.runtime.listeners.JobListener;
@@ -490,10 +488,6 @@ public class GobblinHelixJobLauncher extends AbstractJobLauncher {
       String jobType = this.jobConfig.getString(GobblinClusterConfigurationKeys.HELIX_JOB_TYPE_KEY);
       log.info("Job {} has types associated : {}", this.jobContext.getJobId(), jobType);
       jobConfigBuilder.setJobType(jobType);
-    }
-
-    if (Task.getExecutionModel(ConfigUtils.configToState(jobConfig)).equals(ExecutionModel.STREAMING)) {
-      jobConfigBuilder.setRebalanceRunningTask(true);
     }
 
     jobConfigBuilder.setExpiry(
